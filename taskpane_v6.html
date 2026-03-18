@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ETF Dashboard v6</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+:root{
+  --bg:#f5f7fb; --card:#ffffff; --line:#d8deea; --text:#1f2937; --muted:#6b7280;
+  --accent:#2563eb; --accent2:#1d4ed8; --good:#0f766e; --bad:#b91c1c; --amber:#b45309;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:var(--text)}
+.wrap{padding:14px;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+h1{font-size:20px;margin:0 0 6px}
+p{margin:0;color:var(--muted);line-height:1.45}
+.bigbtn{width:100%;padding:16px 14px;border:none;border-radius:12px;background:var(--accent);color:#fff;font-size:17px;font-weight:700;cursor:pointer}
+.bigbtn:hover{background:var(--accent2)}
+.ghost{background:#fff;color:var(--accent);border:1px solid var(--accent)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kpirow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kpi{padding:12px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.val{font-size:24px;font-weight:700;margin-top:4px}
+.good{color:var(--good)} .bad{color:var(--bad)} .amber{color:var(--amber)}
+.status{font-size:13px;padding:10px 12px;border-radius:10px;background:#eef6ff;border:1px solid #cfe0ff}
+.small{font-size:12px;color:var(--muted)}
+.listbox{padding:10px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.listtitle{font-size:12px;font-weight:700;margin-bottom:8px}
+.item{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #edf1f7}
+.item:last-child{border-bottom:none}
+.mono{font-family:Consolas,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>ETF Dashboard v6</h1>
+    <p>Very simple: one button for your morning update, plus clear signals and top flows.</p>
+  </div>
+
+  <div class="card">
+    <button class="bigbtn" onclick="morningUpdate()">Morning Update</button>
+    <p class="small" style="margin-top:8px">Builds the workbook if needed, then saves a dated snapshot and refreshes the dashboard summary after your normal FactSet refresh.</p>
+  </div>
+
+  <div class="card row">
+    <button class="bigbtn ghost" onclick="openSheet('ETF_Dashboard')">Open Dashboard</button>
+    <button class="bigbtn ghost" onclick="openSheet('ETF_History')">Open History</button>
+  </div>
+
+  <div class="card">
+    <div class="kpirow">
+      <div class="kpi">
+        <div class="label">Signal</div>
+        <div class="val" id="signalText">Ready</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Net 1D Flow</div>
+        <div class="val" id="netFlowText">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card row">
+    <div class="listbox">
+      <div class="listtitle">Top 3 Inflows</div>
+      <div id="inflowsBox" class="small">Run Morning Update</div>
+    </div>
+    <div class="listbox">
+      <div class="listtitle">Top 3 Outflows</div>
+      <div id="outflowsBox" class="small">Run Morning Update</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="status" id="msg">First time: use Morning Update. Then each day, do FactSet Refresh and click Morning Update.</div>
+  </div>
+</div>
+
+<script>
+const ETFS = [
+['IE00BCRY6003','iShares USD Short Dur HY','SHYU.L'],
+['US4642885135','iShares USD HY Corp Bond','HYG'],
+['IE00BZCQB185','iShares MSCI India','NDIA.L'],
+['FR0007052782','Amundi CAC 40','C40.PA'],
+['IE00B27YCK28','iShares MSCI EM LatAm','LTAM.L'],
+['US46090E1038','Invesco QQQ','QQQ'],
+['US78462F1030','SPDR S&P 500','SPY'],
+['US9229083632','Vanguard S&P 500','VOO'],
+['US92206C6646','Vanguard Russell 2000','VTWO'],
+['GB0005774855','BlackRock World Mining','BRWM.L'],
+['US4642883726','iShares Global Infra','IGF'],
+['US4642872919','iShares Global Tech','IXN'],
+['IE00BYPLS672','L&G Cyber Security','USPY.L'],
+['US92204A5048','Vanguard Health Care','VHT'],
+['US9219097683','Vanguard Total Intl','VXUS'],
+['IE00BYTRR863','SPDR MSCI World Energy','WENS.L']
+];
+
+Office.onReady(() => {
+  setMsg('Ready. First time: click Morning Update. Then on later days: FactSet Refresh, then Morning Update.');
+});
+
+function setMsg(t){ document.getElementById('msg').textContent=t; }
+
+async function ensureWorkbook(ctx){
+  const wb = ctx.workbook;
+  const names = ['ETF_Dashboard','ETF_Data','ETF_History','ETF_Codes'];
+  const existing = wb.worksheets;
+  const getOrMake = (n) => { try { return wb.worksheets.getItem(n); } catch(e) { return wb.worksheets.add(n); } };
+
+  const dash = getOrMake('ETF_Dashboard');
+  const data = getOrMake('ETF_Data');
+  const hist = getOrMake('ETF_History');
+  const codes = getOrMake('ETF_Codes');
+
+  data.getUsedRange()?.clear();
+  data.getRange('A1:J1').values=[['ISIN','Name','Ticker','Price','Prev Close','1D %','1D Flow','1W Flow','1M Flow','NAV']];
+  const rows = ETFS.map((e,i)=>[
+    e[0],e[1],e[2],
+    `=IFERROR(FDS(A${i+2},"P_PRICE(0)"),"")`,
+    `=IFERROR(FDS(A${i+2},"P_PRICE(-1)"),"")`,
+    `=IFERROR((D${i+2}/E${i+2})-1,"")`,
+    `=IFERROR(FDS(A${i+2},"ETP_FUND_FLOWS(NOW,1DAY)"),"")`,
+    `=IFERROR(FDS(A${i+2},"ETP_FUND_FLOWS(NOW,1WK)"),"")`,
+    `=IFERROR(FDS(A${i+2},"ETP_FUND_FLOWS(NOW,1MON)"),"")`,
+    `=IFERROR(FDS(A${i+2},"ETP_NAV(NOW)"),"")`
+  ]);
+  data.getRange(`A2:J${rows.length+1}`).formulas = rows;
+  data.getRange('A1:J1').format.fill.color = '#DCE6F1';
+  data.getRange('A1:J1').format.font.bold = true;
+  data.getRange('D2:E100').numberFormat = [['#,##0.00']];
+  data.getRange('F2:F100').numberFormat = [['0.00%']];
+  data.getRange('G2:I100').numberFormat = [['$#,##0;($#,##0)']];
+  data.getRange('J2:J100').numberFormat = [['#,##0.0000']];
+  data.getUsedRange().format.autofitColumns();
+
+  dash.getUsedRange()?.clear();
+  dash.getRange('A1').values=[['ETF Flow Dashboard']];
+  dash.getRange('A1').format.font.size=18;
+  dash.getRange('A1').format.font.bold=true;
+  dash.getRange('A3:B6').values=[
+    ['Net 1D Flow','=SUM(ETF_Data!G2:G17)'],
+    ['Net 1W Flow','=SUM(ETF_Data!H2:H17)'],
+    ['Net 1M Flow','=SUM(ETF_Data!I2:I17)'],
+    ['Funds Count','=COUNTA(ETF_Data!A2:A17)']
+  ];
+  dash.getRange('D3:E7').values=[
+    ['Top Inflow Ticker','=INDEX(ETF_Data!C2:C17,MATCH(MAX(ETF_Data!G2:G17),ETF_Data!G2:G17,0))'],
+    ['Top Inflow Value','=MAX(ETF_Data!G2:G17)'],
+    ['Top Outflow Ticker','=INDEX(ETF_Data!C2:C17,MATCH(MIN(ETF_Data!G2:G17),ETF_Data!G2:G17,0))'],
+    ['Top Outflow Value','=MIN(ETF_Data!G2:G17)'],
+    ['Signal','=IF(B3>500000000,"Risk On",IF(B3<-500000000,"Risk Off","Mixed"))']
+  ];
+  dash.getRange('G3:H5').values=[
+    ['2nd Inflow','=INDEX(ETF_Data!C2:C17,MATCH(LARGE(ETF_Data!G2:G17,2),ETF_Data!G2:G17,0))'],
+    ['3rd Inflow','=INDEX(ETF_Data!C2:C17,MATCH(LARGE(ETF_Data!G2:G17,3),ETF_Data!G2:G17,0))'],
+    ['2nd Outflow','=INDEX(ETF_Data!C2:C17,MATCH(SMALL(ETF_Data!G2:G17,2),ETF_Data!G2:G17,0))']
+  ];
+  dash.getRange('A9:J25').formulas = [[
+    '=ETF_Data!A1','=ETF_Data!B1','=ETF_Data!C1','=ETF_Data!D1','=ETF_Data!E1','=ETF_Data!F1','=ETF_Data!G1','=ETF_Data!H1','=ETF_Data!I1','=ETF_Data!J1'
+  ], ...Array.from({length:16}, (_,i)=>[
+    `=ETF_Data!A${i+2}`,`=ETF_Data!B${i+2}`,`=ETF_Data!C${i+2}`,`=ETF_Data!D${i+2}`,`=ETF_Data!E${i+2}`,`=ETF_Data!F${i+2}`,`=ETF_Data!G${i+2}`,`=ETF_Data!H${i+2}`,`=ETF_Data!I${i+2}`,`=ETF_Data!J${i+2}`
+  ])];
+  dash.getRange('A9:J9').format.fill.color='#DCE6F1';
+  dash.getRange('A9:J9').format.font.bold=true;
+  dash.getRange('D10:E30').numberFormat=[['#,##0.00']];
+  dash.getRange('F10:F30').numberFormat=[['0.00%']];
+  dash.getRange('G10:I30').numberFormat=[['$#,##0;($#,##0)']];
+  dash.getRange('J10:J30').numberFormat=[['#,##0.0000']];
+  dash.getUsedRange().format.autofitColumns();
+
+  hist.getUsedRange()?.clear();
+  hist.getRange('A1:F1').values=[['Snapshot Time','Net 1D Flow','Net 1W Flow','Net 1M Flow','Top Inflow','Top Outflow']];
+  hist.getRange('A1:F1').format.fill.color='#DCE6F1';
+  hist.getRange('A1:F1').format.font.bold=true;
+  hist.getUsedRange().format.autofitColumns();
+
+  codes.getUsedRange()?.clear();
+  codes.getRange('A1:B7').values=[
+    ['Field','FactSet Code'],
+    ['Price','P_PRICE(0)'],
+    ['Previous Close','P_PRICE(-1)'],
+    ['1D Flow','ETP_FUND_FLOWS(NOW,1DAY)'],
+    ['1W Flow','ETP_FUND_FLOWS(NOW,1WK)'],
+    ['1M Flow','ETP_FUND_FLOWS(NOW,1MON)'],
+    ['NAV','ETP_NAV(NOW)']
+  ];
+  codes.getRange('A1:B1').format.fill.color='#DCE6F1';
+  codes.getRange('A1:B1').format.font.bold=true;
+  codes.getUsedRange().format.autofitColumns();
+}
+
+async function morningUpdate(){
+  setMsg('Running Morning Update...');
+  try{
+    await Excel.run(async ctx => {
+      await ensureWorkbook(ctx);
+
+      const dash = ctx.workbook.worksheets.getItem('ETF_Dashboard');
+      const hist = ctx.workbook.worksheets.getItem('ETF_History');
+
+      const used = hist.getUsedRange();
+      used.load('rowCount');
+      const signalCell = dash.getRange('E7');
+      const netCell = dash.getRange('B3');
+      const inflowTicker = dash.getRange('E3');
+      const inflowValue = dash.getRange('E4');
+      const outflowTicker = dash.getRange('E5');
+      const outflowValue = dash.getRange('E6');
+
+      signalCell.load('values');
+      netCell.load('values');
+      inflowTicker.load('values');
+      inflowValue.load('values');
+      outflowTicker.load('values');
+      outflowValue.load('values');
+
+      // 1st sync calculates formulas
+      await ctx.sync();
+
+      const r = used.rowCount + 1;
+      hist.getRange(`A${r}:F${r}`).formulas = [[
+        '=NOW()',
+        '=ETF_Dashboard!B3',
+        '=ETF_Dashboard!B4',
+        '=ETF_Dashboard!B5',
+        '=ETF_Dashboard!E3&" "&TEXT(ETF_Dashboard!E4,"$#,##0")',
+        '=ETF_Dashboard!E5&" "&TEXT(ETF_Dashboard!E6,"$#,##0")'
+      ]];
+      hist.getRange(`A${r}`).numberFormat = [['dd-mmm-yyyy hh:mm']];
+      hist.getUsedRange().format.autofitColumns();
+      dash.activate();
+      await ctx.sync();
+
+      const signal = (signalCell.values && signalCell.values[0] && signalCell.values[0][0]) || 'Mixed';
+      const net = (netCell.values && netCell.values[0] && netCell.values[0][0]) || 0;
+      const topInTicker = inflowTicker.values?.[0]?.[0] || '';
+      const topInValue = inflowValue.values?.[0]?.[0] || 0;
+      const topOutTicker = outflowTicker.values?.[0]?.[0] || '';
+      const topOutValue = outflowValue.values?.[0]?.[0] || 0;
+
+      showSummary(signal, net, topInTicker, topInValue, topOutTicker, topOutValue);
+    });
+    setMsg('Morning Update complete. If you just refreshed FactSet, your dashboard and history are now updated.');
+  }catch(err){
+    setMsg('Error: ' + err.message);
+  }
+}
+
+function money(v){
+  if(v === '' || v == null || isNaN(v)) return '—';
+  const a = Math.abs(v);
+  const s = v < 0 ? '-' : '';
+  if(a >= 1e9) return s + '$' + (a/1e9).toFixed(2) + 'B';
+  if(a >= 1e6) return s + '$' + (a/1e6).toFixed(1) + 'M';
+  return s + '$' + Number(a).toLocaleString();
+}
+
+function showSummary(signal, net, ti, tiv, to, tov){
+  const sig = document.getElementById('signalText');
+  sig.textContent = signal;
+  sig.className = 'val ' + (signal === 'Risk On' ? 'good' : signal === 'Risk Off' ? 'bad' : 'amber');
+
+  const netEl = document.getElementById('netFlowText');
+  netEl.textContent = money(net);
+  netEl.className = 'val ' + (net > 0 ? 'good' : net < 0 ? 'bad' : 'amber');
+
+  const inflows = [
+    `<div class="item"><span class="mono">${ti || '—'}</span><span>${money(tiv)}</span></div>`,
+    `<div class="item"><span class="mono">See Excel dashboard</span><span></span></div>`,
+    `<div class="item"><span class="mono">See Excel dashboard</span><span></span></div>`
+  ].join('');
+  const outflows = [
+    `<div class="item"><span class="mono">${to || '—'}</span><span>${money(tov)}</span></div>`,
+    `<div class="item"><span class="mono">See Excel dashboard</span><span></span></div>`,
+    `<div class="item"><span class="mono">See Excel dashboard</span><span></span></div>`
+  ].join('');
+  document.getElementById('inflowsBox').innerHTML = inflows;
+  document.getElementById('outflowsBox').innerHTML = outflows;
+}
+
+async function openSheet(name){
+  try{
+    await Excel.run(async ctx => {
+      ctx.workbook.worksheets.getItem(name).activate();
+      await ctx.sync();
+    });
+    setMsg(name + ' opened.');
+  }catch(err){
+    setMsg('Could not open ' + name + ': ' + err.message);
+  }
+}
+</script>
+</body>
+</html>
